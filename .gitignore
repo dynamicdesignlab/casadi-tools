@@ -1,0 +1,39 @@
+# Vim swap files
+*.swp
+*.log
+
+# Numpy data files
+*.npy
+*.npz
+
+# Python caches
+**/__pycache__
+**/.pytest_cache
+
+# Casadi generated files
+solver.c
+*.so
+
+# VSCode/editor config files
+**/.vscode
+*.flake8
+
+# Images
+*.png
+
+# You complete me config
+.ycm_extra_conf.py
+
+# Jupyter checkpoints
+**/*.ipynb_checkpoints
+
+# Ignore coverage reports
+*.coverage
+htmlcov/**
+
+# Ignore egg files
+**/*egg-info
+python_goose.code-workspace
+
+# Poetry lock file
+poetry.lock
