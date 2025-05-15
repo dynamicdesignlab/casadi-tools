@@ -169,6 +169,7 @@ class NonlinearProjector:
         init_states: na.NamedVector,
         input_array: na.NamedArray,
         input_times: ArrayLike,
+        init_past: na.NamedVector,
     ) -> tuple[np.ndarray, np.ndarray]:
         """
         Project dynamic model forward, saving intermediate steps.
@@ -200,7 +201,7 @@ class NonlinearProjector:
         inputs = input_array.interp1d(x=self.input_epochs + init_t_s, xp=input_times)
 
         casadi_result = self._mapped_dyn(
-            init_states.to_casadi_array(), inputs, self._rep_step
+            init_states.to_casadi_array(), inputs, init_past.to_casadi_array(), self._rep_step
         )
 
         input_states_col = np.reshape(init_states.to_numpy_array(), (-1, 1))
@@ -216,6 +217,7 @@ class NonlinearProjector:
         init_states: na.NamedVector,
         input_array: na.NamedArray,
         input_times: ArrayLike,
+        init_past: na.NamedVector,
     ) -> tuple[na.NamedVector, float]:
         """
         Project dynamic model forward, returning final result.
@@ -251,6 +253,7 @@ class NonlinearProjector:
             init_states=init_states,
             input_array=input_array,
             input_times=input_times,
+            init_past=init_past,
         )
 
         return state_type.from_array(result[:, -1]), out_epochs[-1]

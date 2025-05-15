@@ -26,6 +26,7 @@ def euler(
     param0: types.CASADI_INPUT_TYPE,
     state0: types.CASADI_INPUT_TYPE,
     input0: types.CASADI_INPUT_TYPE,
+    past0: types.CASADI_INPUT_TYPE,
     step: Real,
 ):
     """
@@ -49,7 +50,7 @@ def euler(
         Integration step
 
     """
-    return state0 + step * oracle(param0, state0, input0)
+    return state0 + step * oracle(param0, state0, input0, past0)
 
 
 def rk2(
@@ -174,6 +175,7 @@ def create_integrator(
     oracle: OracleProtocol,
     num_states: int,
     num_inputs: int,
+    num_past: int,
     num_params: int = 0,
 ) -> OracleProtocol:
     """
@@ -209,6 +211,7 @@ def create_integrator(
             oracle=oracle,
             num_states=num_states,
             num_inputs=num_inputs,
+            num_past=num_past,
             num_params=num_params,
         )
     else:
@@ -217,6 +220,7 @@ def create_integrator(
             oracle=oracle,
             num_states=num_states,
             num_inputs=num_inputs,
+            num_past=num_past,
             num_params=num_params,
         )
 
@@ -228,18 +232,19 @@ def _create_explicit_integrator_no_params(
     oracle: OracleProtocol,
     num_states: int,
     num_inputs: int,
+    num_past: int,
     num_params: int,
 ) -> tuple:
     if num_params > 0:
         part_int = ftool.partial(integrator, oracle)
-        arglist = (num_params, num_states, num_inputs, 1)
+        arglist = (num_params, num_states, num_inputs, num_past, 1)
         return part_int, arglist
 
-    def new_oracle(_, states_vec, inputs_vec):
-        return oracle(states_vec, inputs_vec)
+    def new_oracle(_, states_vec, inputs_vec, past_vec):
+        return oracle(states_vec, inputs_vec, past_vec)
 
     part_int = ftool.partial(integrator, new_oracle, ca.DM(0))
-    arglist = (num_states, num_inputs, 1)
+    arglist = (num_states, num_inputs, num_past, 1)
     return part_int, arglist
 
 
@@ -248,6 +253,7 @@ def _create_implicit_integrator_no_params(
     oracle: OracleProtocol,
     num_states: int,
     num_inputs: int,
+    num_past: int,
     num_params: int,
 ) -> tuple:
     if num_params > 0:
@@ -259,13 +265,15 @@ def _create_implicit_integrator_no_params(
             num_states,
             num_inputs,
             num_inputs,
+            num_past,
+            num_past,
             1,
         )
         return part_int, arglist
 
-    def new_oracle(_, states_vec, inputs_vec):
-        return oracle(states_vec, inputs_vec)
+    def new_oracle(_, states_vec, inputs_vec, past_vec):
+        return oracle(states_vec, inputs_vec, past_vec)
 
     part_int = ftool.partial(integrator, new_oracle, ca.DM(0), ca.DM(0))
-    arglist = (num_states, num_states, num_inputs, num_inputs, 1)
+    arglist = (num_states, num_states, num_inputs, num_inputs, num_past, 1)
     return part_int, arglist

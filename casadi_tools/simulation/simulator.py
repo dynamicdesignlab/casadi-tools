@@ -175,7 +175,7 @@ class SimRunner:
         self._coro.close()
 
     def take_step(
-        self, inputs: na.NamedVector, params: na.NamedVector = None
+        self, inputs: na.NamedVector, past: na.NamedVector, params: na.NamedVector = None
     ) -> na.NamedVector:
         """
         Take step in dynamic simulation.
@@ -198,7 +198,7 @@ class SimRunner:
             NamedVector of parameters at current step
 
         """
-        return self._coro.send((inputs, params))
+        return self._coro.send((inputs, past, params))
 
     def _sim_coro(
         self,
@@ -226,14 +226,14 @@ class SimRunner:
         """
         states = self.init_states.to_casadi_array()
         while self._current_event <= self.num_events:
-            inputs, params = yield self._state_type.from_array(states.full().squeeze())
+            inputs, past, params = yield self._state_type.from_array(states.full().squeeze())
 
             try:
                 states = self._integ(
-                    params, states, inputs.to_casadi_array(), self.time_step
+                    params, states, inputs.to_casadi_array(), past.to_casadi_array(), self.time_step
                 )
             except RuntimeError:
-                states = self._integ(states, inputs.to_casadi_array(), self.time_step)
+                states = self._integ(states, inputs.to_casadi_array(), past.to_casadi_array(), self.time_step)
 
             self._current_event += 1
 

@@ -38,6 +38,7 @@ class NLPProblem:
     """ Input decision variable object """
     other: DV = field(init=False, repr=False, default_factory=DV.factory)
     """ Slack decision variable object """
+    past: DV = field(init=False, repr=False, default_factory=DV.factory)
 
     cstrs: CV = field(init=False, repr=False, default_factory=CV.factory)
     """ Inequality constraints variable object """
@@ -160,16 +161,16 @@ class NLPProblem:
 
     @property
     def num_decision_var(self) -> int:
-        return self.states.num_fields + self.inputs.num_fields + self.other.num_fields
+        return self.states.num_fields + self.inputs.num_fields + self.other.num_fields + self.past.num_fields
 
     @property
     def num_decision_elem(self) -> int:
-        return self.states.num_elem + self.inputs.num_elem + self.other.num_elem
+        return self.states.num_elem + self.inputs.num_elem + self.other.num_elem + self.past.num_elem
 
     @property
     def decision_names(self) -> List[str]:
         return (
-            self.states.field_names + self.inputs.field_names + self.other.field_names
+            self.states.field_names + self.inputs.field_names + self.other.field_names + self.past.field_names
         )
 
     @property
@@ -188,19 +189,19 @@ class NLPProblem:
 
         """
         return ca.horzcat(
-            self.states.to_vector(), self.inputs.to_vector(), self.other.to_vector()
+            self.states.to_vector(), self.inputs.to_vector(), self.other.to_vector(), self.past.to_vector()
         )
 
     @property
     def lbx_vector(self) -> np.ndarray:
         return np.concatenate(
-            (self.states.lb_vector, self.inputs.lb_vector, self.other.lb_vector)
+            (self.states.lb_vector, self.inputs.lb_vector, self.other.lb_vector, self.past.lb_vector)
         )
 
     @property
     def ubx_vector(self) -> np.ndarray:
         return np.concatenate(
-            (self.states.ub_vector, self.inputs.ub_vector, self.other.ub_vector)
+            (self.states.ub_vector, self.inputs.ub_vector, self.other.ub_vector, self.past.ub_vector)
         )
 
     @property
@@ -210,6 +211,7 @@ class NLPProblem:
                 self.states.init_guess_vector,
                 self.inputs.init_guess_vector,
                 self.other.init_guess_vector,
+                self.past.init_guess_vector,
             )
         )
 
@@ -246,7 +248,7 @@ class NLPProblem:
         """
         results = {}
         lo_idx = 0
-        for elem in (self.states, self.inputs, self.other):
+        for elem in (self.states, self.inputs, self.other, self.past):
             for key in elem.field_names:
                 hi_idx = lo_idx + elem.get_size(key)
                 results[key] = results_vector[lo_idx:hi_idx].reshape((1, -1))
@@ -267,7 +269,7 @@ class NLPProblem:
         """
         result_dict = self.unpack_results(results_vector=results_vector)
 
-        for elem in (self.states, self.inputs, self.other):
+        for elem in (self.states, self.inputs, self.other, self.past):
             for key in elem.field_names:
                 elem.set_init_guess(key, result_dict[key])
 
@@ -312,6 +314,7 @@ class NLPProblem:
         new_self.states.clear_expr()
         new_self.inputs.clear_expr()
         new_self.other.clear_expr()
+        new_self.past.clear_expr()
         new_self.params.clear_expr()
         new_self.cstrs.clear_expr()
         new_self._objective = None
@@ -444,6 +447,7 @@ def generate_shared_object(
 def create_nlp(
     state_names: Iterable[str],
     input_names: Iterable[str],
+    past_names: Iterable[str],
     horizon: np.ndarray,
 ) -> NLPProblem:
     nlp = NLPProblem(
@@ -455,6 +459,9 @@ def create_nlp(
 
     for input_name in input_names:
         nlp.inputs.add_field(input_name, nlp.num_stages(0))
+    
+    for past_name in past_names:
+        nlp.past.add_field(past_name, nlp.num_stages(0))
 
     return nlp
 
@@ -462,9 +469,11 @@ def create_nlp(
 def create_nlp_with_dynamics(
     state_names: Iterable[str],
     input_names: Iterable[str],
+    past_names: Iterable[str],
     dynamics: ca.Function,
     horizon: np.ndarray,
     create_init_cstr: bool = True,
+    create_init_past_cstr: bool = True,
 ) -> NLPProblem:
     """
     Create NLP with dynamics.
@@ -499,13 +508,16 @@ def create_nlp_with_dynamics(
     nlp = create_nlp(
         state_names=state_names,
         input_names=input_names,
+        past_names=past_names,
         horizon=horizon,
     )
 
     if create_init_cstr:
         generate_init_state_constr(nlp)
+    if create_init_past_cstr:
+        generate_init_past_constr(nlp)
 
-    generate_dyn_constr(nlp, dynamics, nlp.states.to_array(), nlp.inputs.to_array())
+    generate_dyn_constr(nlp, dynamics, nlp.states.to_array(), nlp.inputs.to_array(), nlp.past.to_array())
 
     return nlp
 
@@ -553,23 +565,73 @@ def generate_dyn_constr(
     dynamics: Callable,
     states: types.CASADI_TYPE,
     inputs: types.CASADI_TYPE,
+    past: types.CASADI_TYPE,
 ) -> None:
-    old_states = states[:, :-1]
-    old_inputs = inputs[:, :-1]
+    old_states = states[:, 1:-1]
+    new_states = states[:, 2:]
+    old_inputs = inputs[:, 1:-1]
+    new_inputs = inputs[:, 2:]
+    old_past = past[:, 1:-1]
+    new_past = past[:, 2:]
+    
+    r_2 = states[0, 1:-1]*0.2 + states[0, 2:]*0.8
+    r_1 = states[0, 1:-1]*0.1 + states[0, 2:]*0.9
+    uy_2 = states[2, 1:-1]*0.2 + states[2, 2:]*0.8
+    uy_1 = states[2, 1:-1]*0.1 + states[2, 2:]*0.9
+    ux_2 = states[1, 1:-1]*0.2 + states[1, 2:]*0.8
+    ux_1 = states[1, 1:-1]*0.1 + states[1, 2:]*0.9
+    delta_2 = states[8, 1:-1]*0.2 + states[8, 2:]*0.8
+    delta_1 = states[8, 1:-1]*0.1 + states[8, 2:]*0.9
+    fx_2 = states[9, 1:-1]*0.2 + states[9, 2:]*0.8
+    fx_1 = states[9, 1:-1]*0.1 + states[9, 2:]*0.9
 
-    new_states = states[:, 1:]
-    new_inputs = inputs[:, 1:]
+    new_past_calc = ca.vertcat(r_2, r_1, uy_2, uy_1, ux_2, ux_1, delta_2, delta_1, fx_2, fx_1)
 
-    dt_N = nlp.steps(0)
+    dt_N = nlp.steps(0)[:-1]
 
-    map_integ = dynamics.map(nlp.num_stages(0) - 1)
+    map_integ = dynamics.map(nlp.num_stages(0) - 2)
     if dynamics.name() == "trapz":
-        calc_states = map_integ(old_states, new_states, old_inputs, new_inputs, dt_N)
+        calc_states = map_integ(old_states, new_states, old_inputs, new_inputs, old_past, dt_N)
     else:
-        calc_states = map_integ(old_states, old_inputs, dt_N)
+        calc_states = map_integ(old_states, old_inputs, old_past, dt_N)
 
-    dyn_g_vec = new_states - calc_states
-    for name, g in zip(nlp.states.field_names, ca.vertsplit(dyn_g_vec)):
+    dyn_x_horizon = new_states - calc_states
+    dyn_p_horizon = new_past - new_past_calc
+
+    p0 = past[:,0]
+    x0 = states[:,0]
+    u0 = inputs[:,0]
+
+    p1 = past[:,1]
+    x1 = states[:,1]
+
+    r_2 = p0[1]
+    r_1 = x0[0]
+    uy_2 = p0[3]
+    uy_1 = x0[2]
+    ux_2 = p0[5]
+    ux_1 = x0[1]
+    delta_2 = p0[7]
+    delta_1 = x0[8]
+    fx_2 = p0[9]
+    fx_1 = x0[9]
+
+    p1_calc = ca.vertcat(r_2, r_1, uy_2, uy_1, ux_2, ux_1, delta_2, delta_1, fx_2, fx_1)
+
+    dt_N = nlp.steps(0)[0]
+
+    map_integ = dynamics.map(1)
+    x1_calc = map_integ(x0, u0, p0, dt_N)
+
+    dyn_x_t1 = x1 - x1_calc
+    dyn_p_t1 = p1 - p1_calc
+
+    dyn_g_vec_x = ca.horzcat(dyn_x_t1, dyn_x_horizon)
+    dyn_g_vec_p = ca.horzcat(dyn_p_t1, dyn_p_horizon)
+    
+    for name, g in zip(nlp.states.field_names, ca.vertsplit(dyn_g_vec_x)):
+        nlp.cstrs.add_field(f"dyn_{name}", g, lower=0.0, upper=0.0)
+    for name, g in zip(nlp.past.field_names, ca.vertsplit(dyn_g_vec_p)):
         nlp.cstrs.add_field(f"dyn_{name}", g, lower=0.0, upper=0.0)
 
 
@@ -578,7 +640,11 @@ def generate_init_state_constr(nlp: NLPProblem) -> None:
     states = nlp.states.to_array()
     init_g_vec = states[:, 0] - nlp.params.get_expr("init_states")
     nlp.cstrs.add_field("init_states", init_g_vec, lower=0.0, upper=0.0)
-
+def generate_init_past_constr(nlp: NLPProblem) -> None:
+    nlp.params.add_field("init_past", nlp.past.num_fields)
+    past = nlp.past.to_array()
+    init_g_vec = past[:, 0] - nlp.params.get_expr("init_past")
+    nlp.cstrs.add_field("init_past", init_g_vec, lower=0.0, upper=0.0)
 
 def merge_nlps(nlps: Iterable[NLPProblem], *, link_stages=False) -> NLPProblem:
     horizons = []
@@ -589,9 +655,11 @@ def merge_nlps(nlps: Iterable[NLPProblem], *, link_stages=False) -> NLPProblem:
 
     state_list = [prob.states for prob in nlps]
     input_list = [prob.inputs for prob in nlps]
+    past_list = [prob.past for prob in nlps]
     new_prob.states = DV.merge(state_list)
     new_prob.inputs = DV.merge(input_list)
     new_prob.other = DV.merge([prob.other for prob in nlps])
+    new_prob.past = DV.merge(past_list)
 
     new_prob.cstrs = CV.merge([prob.cstrs for prob in nlps])
 
@@ -637,7 +705,8 @@ def _check_vars_compatible(var_names: Iterable[str]) -> bool:
 def _link_stages(new_nlp: NLPProblem, nlp_states: Iterable[DV]) -> None:
     states_good = _check_vars_compatible(new_nlp.states.field_names)
     inputs_good = _check_vars_compatible(new_nlp.inputs.field_names)
-    if not states_good or not inputs_good:
+    past_good = _check_vars_compatible(new_nlp.past.field_names)
+    if not states_good or not inputs_good or not past_good:
         raise RuntimeError("NLP variables are not compatible.")
 
     num_links = len(nlp_states) - 1
